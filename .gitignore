@@ -1,0 +1,30 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local lake and DuckDB
+data/lake/
+data/*.duckdb
+data/*.duckdb.wal
+dbt_financebuddy/target/
+dbt_financebuddy/dbt_packages/
+dbt_financebuddy/logs/
+logs/
+ml/artifacts/*.joblib
+ml/artifacts/*.json
+!ml/artifacts/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+dbt_financebuddy/.user.yml

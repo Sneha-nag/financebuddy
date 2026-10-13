@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: fct_transactions
+    columns:
+      - name: transaction_id
+        tests: [unique, not_null]
+      - name: user_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_user')
+                field: user_id
+  - name: dim_user
+    columns:
+      - name: user_id
+        tests: [unique, not_null]
+  - name: dim_merchant
+    columns:
+      - name: merchant_id
+        tests: [unique, not_null]
+  - name: mart_monthly_cashflow
+    columns:
+      - name: user_id
+        tests: [not_null]
+      - name: month_start
+        tests: [not_null]
+  - name: mart_subscriptions
+    columns:
+      - name: user_id
+        tests: [not_null]
+      - name: merchant_id
+        tests: [not_null]
+  - name: mart_duplicate_subscriptions
+    columns:
+      - name: user_id
+        tests: [not_null]
+      - name: service_count
+        tests: [not_null]

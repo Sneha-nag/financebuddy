@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: stg_users
+    columns:
+      - name: user_id
+        tests: [unique, not_null]
+  - name: stg_merchants
+    columns:
+      - name: merchant_id
+        tests: [unique, not_null]
+  - name: stg_transactions
+    columns:
+      - name: transaction_id
+        tests: [unique, not_null]
+      - name: user_id
+        tests: [not_null]
+      - name: amount
+        tests: [not_null]
+      - name: category
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  [
+                    "Subscriptions",
+                    "Health",
+                    "Groceries",
+                    "Dining",
+                    "Transport",
+                    "Shopping",
+                    "Housing",
+                    "Utilities",
+                    "Income",
+                    "Transfers",
+                    "Travel",
+                    "Other",
+                  ]

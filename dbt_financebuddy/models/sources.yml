@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Typed Parquet landing tables produced by the generator / ingest step.
+    schema: bronze
+    tables:
+      - name: users
+        columns:
+          - name: user_id
+            tests:
+              - unique
+              - not_null
+      - name: transactions
+        columns:
+          - name: transaction_id
+            tests:
+              - unique
+              - not_null
+          - name: user_id
+            tests:
+              - not_null
+          - name: amount
+            tests:
+              - not_null
+      - name: merchants
+        columns:
+          - name: merchant_id
+            tests:
+              - unique
+              - not_null

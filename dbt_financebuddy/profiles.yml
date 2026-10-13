@@ -1,0 +1,21 @@
+financebuddy:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      # Resolved from repo root (run dbt with cwd = financebuddy/)
+      path: "data/financebuddy.duckdb"
+      schema: main
+      threads: 4
+
+    # Optional: use after uploading Parquet to S3 and creating Glue tables.
+    # Requires: pip install dbt-athena-community
+    athena:
+      type: athena
+      database: awsdatacatalog
+      schema: financebuddy
+      s3_staging_dir: "s3://YOUR_BUCKET/athena-results/"
+      s3_data_dir: "s3://YOUR_BUCKET/financebuddy/gold/"
+      region_name: us-east-1
+      threads: 4
+      work_group: primary

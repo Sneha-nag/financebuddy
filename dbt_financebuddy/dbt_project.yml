@@ -1,0 +1,31 @@
+name: financebuddy
+version: 1.0.0
+config-version: 2
+profile: financebuddy
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+analysis-paths: ["analyses"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - target
+  - dbt_packages
+  - logs
+
+models:
+  financebuddy:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+
+vars:
+  currency: USD

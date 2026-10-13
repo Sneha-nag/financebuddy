@@ -1,0 +1,34 @@
+project_name: financebuddy
+seed: 42
+
+generator:
+  n_users: 250
+  months: 18
+  start_date: "2024-01-01"
+  currency: USD
+
+paths:
+  lake_root: data/lake
+  raw: data/lake/raw
+  bronze: data/lake/bronze
+  silver: data/lake/silver
+  gold: data/lake/gold
+  duckdb: data/financebuddy.duckdb
+  ground_truth: data/lake/raw/ground_truth
+  ml_artifacts: ml/artifacts
+
+dbt:
+  project_dir: dbt_financebuddy
+  profiles_dir: dbt_financebuddy
+  target: local
+
+ml:
+  fraud_contamination: 0.02
+  subscription_amount_tol: 0.08
+  subscription_gap_days_min: 25
+  subscription_gap_days_max: 40
+  habit_lookback_days: 90
+
+aws:
+  region: us-east-1
+  s3_prefix: financebuddy
