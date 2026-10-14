@@ -31,7 +31,7 @@ ml:
   habit_lookback_days: 90
   coach:
     # Turn on with FINANCEBUDDY_COACH_ENABLED=1
-    model_id: anthropic.claude-haiku-4-5-20251001-v1:0
+    model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
     daily_limit: 30
     max_tokens: 800
     temperature: 0.2

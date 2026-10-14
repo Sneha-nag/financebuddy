@@ -167,19 +167,128 @@ def _allowed_cite_strings(context: dict[str, Any]) -> set[str]:
     return allowed
 
 
-def extract_json_object(text: str) -> dict[str, Any]:
-    # Models love wrapping JSON in ``` fences even when you say not to.
-    text = text.strip()
+def _strip_code_fences(text: str) -> str:
+    text = text.strip().lstrip("\ufeff")
+    # ```json ... ``` or bare ``` ... ```
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise
-        return json.loads(match.group(0))
+    return text.strip()
+
+
+def _extract_balanced_object(text: str) -> str | None:
+    """Return the first top-level {...} span, respecting strings/escapes."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _repair_json_text(blob: str) -> str:
+    """Best-effort cleanup for common LLM JSON mistakes."""
+    blob = blob.strip()
+    # Smart quotes → plain
+    blob = blob.replace("\u201c", '"').replace("\u201d", '"')
+    blob = blob.replace("\u2018", "'").replace("\u2019", "'")
+    # Trailing commas before } or ]
+    blob = re.sub(r",(\s*[}\]])", r"\1", blob)
+    # Bare newlines inside strings are illegal JSON; escape them when clearly inside quotes.
+    # (Simple pass: only when we see an unescaped newline between quotes.)
+    out: list[str] = []
+    in_str = False
+    escape = False
+    for ch in blob:
+        if in_str:
+            if escape:
+                out.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                in_str = False
+                out.append(ch)
+                continue
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+    return "".join(out)
+
+
+def extract_json_object(text: str) -> dict[str, Any]:
+    """
+    Parse a JSON object out of messy model output.
+    Raises json.JSONDecodeError if nothing workable is found.
+    """
+    cleaned = _strip_code_fences(text)
+    candidates: list[str] = []
+    balanced = _extract_balanced_object(cleaned)
+    if balanced:
+        candidates.append(balanced)
+    candidates.append(cleaned)
+    # Greedy fallback (last resort)
+    match = re.search(r"\{[\s\S]*\}", cleaned)
+    if match:
+        candidates.append(match.group(0))
+
+    errors: list[Exception] = []
+    seen: set[str] = set()
+    for cand in candidates:
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
+        for variant in (cand, _repair_json_text(cand)):
+            if variant in seen and variant != cand:
+                pass
+            try:
+                obj = json.loads(variant)
+                if isinstance(obj, dict):
+                    return obj
+                errors.append(TypeError(f"JSON root was {type(obj).__name__}, expected object"))
+            except Exception as exc:  # noqa: BLE001 — collect and try next variant
+                errors.append(exc)
+
+    # Prefer the last JSONDecodeError message (most informative)
+    for exc in reversed(errors):
+        if isinstance(exc, json.JSONDecodeError):
+            raise exc
+    raise json.JSONDecodeError("Could not extract a JSON object from model output", text, 0)
 
 
 def validate_coach_response(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -265,10 +374,33 @@ def coach_enabled() -> bool:
 def default_model_id() -> str:
     return os.getenv(
         "FINANCEBUDDY_BEDROCK_MODEL",
-        # Claude Haiku 4.5 (cheap). If Converse requires an inference profile, use:
-        # us.anthropic.claude-haiku-4-5-20251001-v1:0
-        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        # Haiku 4.5 needs an inference profile ID on Bedrock (not the raw foundation ID).
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
+
+
+def _converse_text(
+    client,
+    *,
+    model_id: str,
+    system: str,
+    messages: list[dict],
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, dict]:
+    resp = client.converse(
+        modelId=model_id,
+        system=[{"text": system}],
+        messages=messages,
+        inferenceConfig={
+            "maxTokens": max_tokens,
+            "temperature": temperature,
+        },
+    )
+    parts = resp.get("output", {}).get("message", {}).get("content", [])
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    usage = resp.get("usage") or {}
+    return text, usage
 
 
 def invoke_bedrock_coach(
@@ -282,7 +414,7 @@ def invoke_bedrock_coach(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Call Bedrock Converse API. Returns (plan, meta).
-    Requires bedrock:InvokeModel / Converse permission and model access enabled.
+    Retries once with a JSON-repair prompt if the first reply won't parse.
     """
     import boto3
 
@@ -298,28 +430,71 @@ def invoke_bedrock_coach(
     client = session.client("bedrock-runtime")
 
     user_msg = (
-        "Create a grounded action plan from this FinanceBuddy mart context JSON:\n"
+        "Create a grounded action plan from this FinanceBuddy mart context JSON.\n"
+        "Reply with ONE JSON object only — no markdown, no commentary.\n"
         + json.dumps(context, default=str)
     )
-    resp = client.converse(
-        modelId=model_id,
-        system=[{"text": SYSTEM_PROMPT}],
-        messages=[{"role": "user", "content": [{"text": user_msg}]}],
-        inferenceConfig={
-            "maxTokens": max_tokens,
-            "temperature": temperature,
-        },
+    messages: list[dict] = [{"role": "user", "content": [{"text": user_msg}]}]
+
+    text, usage = _converse_text(
+        client,
+        model_id=model_id,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
     )
-    parts = resp.get("output", {}).get("message", {}).get("content", [])
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-    usage = resp.get("usage") or {}
-    plan = validate_coach_response(extract_json_object(text), context)
+    input_tokens = int(usage.get("inputTokens") or 0)
+    output_tokens = int(usage.get("outputTokens") or 0)
+    repaired = False
+    parse_error: Exception | None = None
+
+    try:
+        plan_obj = extract_json_object(text)
+    except Exception as exc:  # noqa: BLE001
+        parse_error = exc
+        # Second try: ask the model to fix its own JSON (cheap, usually works).
+        repair_messages = messages + [
+            {"role": "assistant", "content": [{"text": text}]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": (
+                            "Your previous reply was not valid JSON "
+                            f"({type(exc).__name__}: {exc}). "
+                            "Return ONLY a corrected JSON object matching the required schema. "
+                            "No markdown fences, no trailing commas, no commentary."
+                        )
+                    }
+                ],
+            },
+        ]
+        text2, usage2 = _converse_text(
+            client,
+            model_id=model_id,
+            system=SYSTEM_PROMPT,
+            messages=repair_messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        input_tokens += int(usage2.get("inputTokens") or 0)
+        output_tokens += int(usage2.get("outputTokens") or 0)
+        text = text2
+        repaired = True
+        plan_obj = extract_json_object(text)
+
+    plan = validate_coach_response(plan_obj, context)
+    if parse_error is not None:
+        plan.setdefault("harness_warnings", []).append(f"json_repair_retry:{type(parse_error).__name__}")
+
     meta = {
         "model_id": model_id,
-        "input_tokens": usage.get("inputTokens"),
-        "output_tokens": usage.get("outputTokens"),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
         "context_hash": context_hash(context),
         "raw_chars": len(text),
+        "json_repaired": repaired,
     }
     return plan, meta
 

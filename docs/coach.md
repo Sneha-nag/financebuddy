@@ -10,12 +10,13 @@ I added this so the UI can explain the marts in plain English. The model only se
 
 ```bash
 FINANCEBUDDY_COACH_ENABLED=1
-FINANCEBUDDY_BEDROCK_MODEL=anthropic.claude-haiku-4-5-20251001-v1:0
-# If Bedrock asks for an inference profile, use instead:
-# FINANCEBUDDY_BEDROCK_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+FINANCEBUDDY_BEDROCK_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
 AWS_REGION=us-east-1
 AWS_PROFILE=default
 ```
+
+Haiku 4.5 needs the `us.` inference profile ID (not the bare foundation-model ID).
+
 
 4. Run Streamlit → **AI Coach** tab → **Generate plan**.
 
