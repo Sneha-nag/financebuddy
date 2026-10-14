@@ -24,45 +24,111 @@ from config import load_settings
 st.set_page_config(page_title="FinanceBuddy", page_icon="💰", layout="wide")
 
 
-def _export_secrets_to_env() -> None:
+_SECRET_KEYS = (
+    "FINANCEBUDDY_BACKEND",
+    "FINANCEBUDDY_S3_BUCKET",
+    "FINANCEBUDDY_APP_PASSWORD",
+    "FINANCEBUDDY_ATHENA_S3_STAGING",
+    "FINANCEBUDDY_ATHENA_MARTS_SCHEMA",
+    "FINANCEBUDDY_ATHENA_WORKGROUP",
+    "FINANCEBUDDY_COACH_ENABLED",
+    "FINANCEBUDDY_BEDROCK_MODEL",
+    "FINANCEBUDDY_COACH_DAILY_LIMIT",
+    "AWS_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_PROFILE",
+)
+
+
+def _flatten_secrets(obj, prefix: str = "") -> dict[str, str]:
+    """Flatten nested Streamlit secret tables into KEY -> string value."""
+    out: dict[str, str] = {}
+    if obj is None:
+        return out
+    try:
+        items = dict(obj).items()
+    except Exception:
+        return out
+    for key, val in items:
+        name = f"{prefix}{key}"
+        if isinstance(val, (dict,)):
+            out.update(_flatten_secrets(val, prefix=""))
+            continue
+        # AttrDict / mapping nested sections
+        try:
+            nested = dict(val)
+            out.update(_flatten_secrets(nested, prefix=""))
+            continue
+        except Exception:
+            pass
+        if val is not None and str(val).strip() != "":
+            out[str(name)] = str(val).strip()
+    return out
+
+
+def _export_secrets_to_env() -> list[str]:
     # Streamlit Cloud puts config in st.secrets; boto3 / our backends read os.environ.
     import os
 
+    found_keys: list[str] = []
     try:
         secrets = st.secrets  # type: ignore[attr-defined]
     except Exception:
-        return
+        return found_keys
 
-    def _read(key: str):
-        try:
-            if key in secrets:
-                return secrets[key]
-        except Exception:
-            pass
-        try:
-            return secrets.get(key)
-        except Exception:
-            return None
+    flat = _flatten_secrets(secrets)
+    found_keys = sorted(flat.keys())
 
-    for key in (
-        "FINANCEBUDDY_BACKEND",
-        "FINANCEBUDDY_S3_BUCKET",
-        "FINANCEBUDDY_APP_PASSWORD",
-        "FINANCEBUDDY_ATHENA_S3_STAGING",
-        "FINANCEBUDDY_ATHENA_MARTS_SCHEMA",
-        "FINANCEBUDDY_ATHENA_WORKGROUP",
-        "FINANCEBUDDY_COACH_ENABLED",
-        "FINANCEBUDDY_BEDROCK_MODEL",
-        "FINANCEBUDDY_COACH_DAILY_LIMIT",
-        "AWS_REGION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_PROFILE",
-    ):
-        val = _read(key)
-        if val is not None and str(val).strip() != "":
-            # Secrets win on Cloud so a missing local env can't force duckdb.
-            os.environ[key] = str(val).strip()
+    # Also accept common aliases people type by habit.
+    aliases = {
+        "S3_BUCKET": "FINANCEBUDDY_S3_BUCKET",
+        "BUCKET": "FINANCEBUDDY_S3_BUCKET",
+        "BACKEND": "FINANCEBUDDY_BACKEND",
+        "AWS_KEY": "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET": "AWS_SECRET_ACCESS_KEY",
+    }
+    for src, dest in aliases.items():
+        if src in flat and dest not in flat:
+            flat[dest] = flat[src]
+
+    for key in _SECRET_KEYS:
+        if key in flat:
+            os.environ[key] = flat[key]
+    return found_keys
+
+
+def _secrets_help(found_keys: list[str]) -> None:
+    import os
+
+    st.caption(
+        "Env check — "
+        f"BACKEND={os.getenv('FINANCEBUDDY_BACKEND')!r} | "
+        f"BUCKET set: {bool(os.getenv('FINANCEBUDDY_S3_BUCKET'))} | "
+        f"AWS key set: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}"
+    )
+    st.caption(
+        "Secret key names Streamlit loaded: "
+        + (", ".join(found_keys) if found_keys else "(none — Secrets are empty for this app)")
+    )
+    st.markdown(
+        """
+Paste this **exactly** into **Streamlit Cloud → your app → ⋮ → Settings → Secrets**
+(not GitHub, not `.env`):
+
+```toml
+FINANCEBUDDY_BACKEND = "s3"
+FINANCEBUDDY_S3_BUCKET = "financebuddy-sneha"
+AWS_REGION = "us-east-1"
+AWS_ACCESS_KEY_ID = "AKIAXXXXXXXX"
+AWS_SECRET_ACCESS_KEY = "your-secret-here"
+FINANCEBUDDY_APP_PASSWORD = "your-demo-password"
+```
+
+Then click **Save**, open **⋮ → Reboot app**.  
+If the key-name list above stays `(none)`, secrets were not saved on this app.
+        """
+    )
 
 
 @st.cache_resource
@@ -73,17 +139,9 @@ def cached_backend(backend_name: str):
 
 
 def main() -> None:
-    import os
-
-    _export_secrets_to_env()
+    found_keys = _export_secrets_to_env()
     require_password()
     settings = load_settings()
-
-    try:
-        backend_name = resolve_backend_name(settings)
-    except Exception as exc:
-        st.error(str(exc))
-        st.stop()
 
     st.title("FinanceBuddy")
     st.caption(
@@ -91,33 +149,11 @@ def main() -> None:
     )
 
     try:
+        backend_name = resolve_backend_name(settings)
         backend = cached_backend(backend_name)
     except Exception as exc:
-        st.error(f"Could not start data backend `{backend_name}`: {exc}")
-        # Help debug Cloud secrets without printing secret values.
-        st.caption(
-            "Secrets check — "
-            f"BACKEND set: {bool(os.getenv('FINANCEBUDDY_BACKEND'))} | "
-            f"BUCKET set: {bool(os.getenv('FINANCEBUDDY_S3_BUCKET'))} | "
-            f"AWS key set: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}"
-        )
-        st.markdown(
-            """
-**Streamlit Cloud → ⋮ menu → Settings → Secrets** must include **all** of these (exact names):
-
-```toml
-FINANCEBUDDY_BACKEND = "s3"
-FINANCEBUDDY_S3_BUCKET = "financebuddy-sneha"
-AWS_REGION = "us-east-1"
-AWS_ACCESS_KEY_ID = "AKIA..."
-AWS_SECRET_ACCESS_KEY = "..."
-FINANCEBUDDY_APP_PASSWORD = "your-demo-password"
-```
-
-Save secrets, then **Reboot**.  
-If `BUCKET set: False` above, Streamlit isn't seeing `FINANCEBUDDY_S3_BUCKET` yet.
-            """
-        )
+        st.error(str(exc))
+        _secrets_help(found_keys)
         st.stop()
 
     st.sidebar.markdown(f"**Data backend:** `{backend.name}`")
