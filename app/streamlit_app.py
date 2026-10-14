@@ -73,10 +73,17 @@ def cached_backend(backend_name: str):
 
 
 def main() -> None:
+    import os
+
     _export_secrets_to_env()
     require_password()
     settings = load_settings()
-    backend_name = resolve_backend_name(settings)
+
+    try:
+        backend_name = resolve_backend_name(settings)
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
 
     st.title("FinanceBuddy")
     st.caption(
@@ -87,9 +94,16 @@ def main() -> None:
         backend = cached_backend(backend_name)
     except Exception as exc:
         st.error(f"Could not start data backend `{backend_name}`: {exc}")
+        # Help debug Cloud secrets without printing secret values.
+        st.caption(
+            "Secrets check — "
+            f"BACKEND set: {bool(os.getenv('FINANCEBUDDY_BACKEND'))} | "
+            f"BUCKET set: {bool(os.getenv('FINANCEBUDDY_S3_BUCKET'))} | "
+            f"AWS key set: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}"
+        )
         st.markdown(
             """
-**Streamlit Cloud:** App settings → Secrets should include:
+**Streamlit Cloud → ⋮ menu → Settings → Secrets** must include **all** of these (exact names):
 
 ```toml
 FINANCEBUDDY_BACKEND = "s3"
@@ -100,7 +114,8 @@ AWS_SECRET_ACCESS_KEY = "..."
 FINANCEBUDDY_APP_PASSWORD = "your-demo-password"
 ```
 
-Then reboot the app. Local DuckDB path: `pip install -r requirements-pipeline.txt` and `python scripts/run_pipeline.py`.
+Save secrets, then **Reboot**.  
+If `BUCKET set: False` above, Streamlit isn't seeing `FINANCEBUDDY_S3_BUCKET` yet.
             """
         )
         st.stop()

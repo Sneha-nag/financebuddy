@@ -39,24 +39,55 @@ def validate_user_id(user_id: str) -> str:
     return user_id
 
 
+def _duckdb_installed() -> bool:
+    try:
+        import duckdb  # noqa: F401
+
+        return True
+    except ModuleNotFoundError:
+        return False
+
+
 def _on_streamlit_cloud() -> bool:
-    # Community Cloud mounts the app under /mount/src
-    return Path("/mount/src").exists() or bool(os.getenv("STREAMLIT_SHARING_MODE"))
+    # Community Cloud mounts the app under /mount/src (path has varied over time).
+    markers = (
+        Path("/mount/src").exists(),
+        Path("/app").exists() and bool(os.getenv("STREAMLIT_SERVER_PORT")),
+        bool(os.getenv("STREAMLIT_SHARING_MODE")),
+        bool(os.getenv("STREAMLIT_RUNTIME_ENVIRONMENT")),
+    )
+    return any(markers)
 
 
 def resolve_backend_name(settings: dict) -> str:
     env = (os.getenv("FINANCEBUDDY_BACKEND") or "").strip().lower()
+    bucket = (os.getenv("FINANCEBUDDY_S3_BUCKET") or settings.get("aws", {}).get("bucket") or "").strip()
+    has_aws_keys = bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
+
     if env in {"duckdb", "s3", "athena"}:
+        # Cloud image has no duckdb package — don't honor duckdb even if someone set it.
+        if env == "duckdb" and not _duckdb_installed():
+            if bucket:
+                return "s3"
+            raise RuntimeError(
+                "FINANCEBUDDY_BACKEND=duckdb but duckdb isn't installed. "
+                "Set FINANCEBUDDY_BACKEND=s3 and FINANCEBUDDY_S3_BUCKET in Streamlit secrets."
+            )
         return env
 
-    # Hosted demos should hit S3 gold, not local DuckDB (duckdb isn't in Cloud requirements).
-    bucket = (os.getenv("FINANCEBUDDY_S3_BUCKET") or settings.get("aws", {}).get("bucket") or "").strip()
-    if bucket and _on_streamlit_cloud():
+    # No explicit backend: prefer S3 whenever DuckDB isn't available or we're clearly hosted.
+    if not _duckdb_installed() and bucket:
+        return "s3"
+    if (_on_streamlit_cloud() or has_aws_keys) and bucket:
         return "s3"
 
     configured = str(settings.get("app", {}).get("backend", "duckdb")).lower()
-    if configured == "duckdb" and bucket and _on_streamlit_cloud():
-        return "s3"
+    if configured == "duckdb" and not _duckdb_installed():
+        raise RuntimeError(
+            "No DuckDB package on this host, and FINANCEBUDDY_S3_BUCKET is not set. "
+            "In Streamlit Cloud Secrets add FINANCEBUDDY_BACKEND=\"s3\" and "
+            "FINANCEBUDDY_S3_BUCKET=\"financebuddy-sneha\" plus AWS keys, then reboot."
+        )
     return configured
 
 
