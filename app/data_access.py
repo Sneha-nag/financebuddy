@@ -13,6 +13,7 @@ import os
 import re
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -38,11 +39,25 @@ def validate_user_id(user_id: str) -> str:
     return user_id
 
 
+def _on_streamlit_cloud() -> bool:
+    # Community Cloud mounts the app under /mount/src
+    return Path("/mount/src").exists() or bool(os.getenv("STREAMLIT_SHARING_MODE"))
+
+
 def resolve_backend_name(settings: dict) -> str:
     env = (os.getenv("FINANCEBUDDY_BACKEND") or "").strip().lower()
     if env in {"duckdb", "s3", "athena"}:
         return env
-    return str(settings.get("app", {}).get("backend", "duckdb")).lower()
+
+    # Hosted demos should hit S3 gold, not local DuckDB (duckdb isn't in Cloud requirements).
+    bucket = (os.getenv("FINANCEBUDDY_S3_BUCKET") or settings.get("aws", {}).get("bucket") or "").strip()
+    if bucket and _on_streamlit_cloud():
+        return "s3"
+
+    configured = str(settings.get("app", {}).get("backend", "duckdb")).lower()
+    if configured == "duckdb" and bucket and _on_streamlit_cloud():
+        return "s3"
+    return configured
 
 
 class DataBackend(ABC):
@@ -491,6 +506,15 @@ def get_backend(settings: dict) -> DataBackend:
     app_cfg = settings.get("app", {})
 
     if name == "duckdb":
+        try:
+            import duckdb  # noqa: F401
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "DuckDB backend selected, but the duckdb package is not installed. "
+                "On Streamlit Cloud set secrets FINANCEBUDDY_BACKEND='s3' and "
+                "FINANCEBUDDY_S3_BUCKET='your-bucket' (plus AWS keys). "
+                "Locally: pip install -r requirements-pipeline.txt"
+            ) from exc
         return DuckDBBackend(settings["paths"]["duckdb"])
 
     if not bucket:

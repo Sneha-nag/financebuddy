@@ -25,13 +25,25 @@ st.set_page_config(page_title="FinanceBuddy", page_icon="💰", layout="wide")
 
 
 def _export_secrets_to_env() -> None:
-    # Streamlit Cloud puts config in st.secrets; boto3 still looks at os.environ.
+    # Streamlit Cloud puts config in st.secrets; boto3 / our backends read os.environ.
     import os
 
     try:
         secrets = st.secrets  # type: ignore[attr-defined]
     except Exception:
         return
+
+    def _read(key: str):
+        try:
+            if key in secrets:
+                return secrets[key]
+        except Exception:
+            pass
+        try:
+            return secrets.get(key)
+        except Exception:
+            return None
+
     for key in (
         "FINANCEBUDDY_BACKEND",
         "FINANCEBUDDY_S3_BUCKET",
@@ -47,12 +59,10 @@ def _export_secrets_to_env() -> None:
         "AWS_SECRET_ACCESS_KEY",
         "AWS_PROFILE",
     ):
-        try:
-            val = secrets.get(key)
-        except Exception:
-            val = None
-        if val and key not in os.environ:
-            os.environ[key] = str(val)
+        val = _read(key)
+        if val is not None and str(val).strip() != "":
+            # Secrets win on Cloud so a missing local env can't force duckdb.
+            os.environ[key] = str(val).strip()
 
 
 @st.cache_resource
@@ -77,13 +87,22 @@ def main() -> None:
         backend = cached_backend(backend_name)
     except Exception as exc:
         st.error(f"Could not start data backend `{backend_name}`: {exc}")
-        if backend_name == "duckdb":
-            st.info("Run: `python scripts/run_pipeline.py`")
-        else:
-            st.info(
-                "Set `FINANCEBUDDY_S3_BUCKET` and AWS credentials. "
-                "For Athena mode also ensure dbt `--target athena` has built marts."
-            )
+        st.markdown(
+            """
+**Streamlit Cloud:** App settings → Secrets should include:
+
+```toml
+FINANCEBUDDY_BACKEND = "s3"
+FINANCEBUDDY_S3_BUCKET = "financebuddy-sneha"
+AWS_REGION = "us-east-1"
+AWS_ACCESS_KEY_ID = "AKIA..."
+AWS_SECRET_ACCESS_KEY = "..."
+FINANCEBUDDY_APP_PASSWORD = "your-demo-password"
+```
+
+Then reboot the app. Local DuckDB path: `pip install -r requirements-pipeline.txt` and `python scripts/run_pipeline.py`.
+            """
+        )
         st.stop()
 
     st.sidebar.markdown(f"**Data backend:** `{backend.name}`")
