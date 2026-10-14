@@ -1,4 +1,10 @@
-"""Load bronze Parquet into DuckDB schemas for dbt sources."""
+"""
+Copy bronze Parquet into DuckDB so dbt's source('bronze', ...) resolves.
+
+dbt doesn't read the lake files directly in the local profile — it reads these
+tables. Schemas for staging/intermediate/marts are created empty so later models
+have somewhere to land.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ def load_bronze(settings: dict | None = None) -> str:
         parquet = bronze / f"{table}.parquet"
         if not parquet.exists():
             raise FileNotFoundError(f"Missing bronze table: {parquet}")
+        # replace each run so re-generating data doesn't leave stale rows around
         con.execute(
             f"""
             create or replace table bronze.{table} as

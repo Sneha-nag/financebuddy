@@ -1,64 +1,107 @@
-"""FinanceBuddy coach UI — habits, subscriptions, fraud, suggestions."""
+"""
+Streamlit UI.
+
+Most of the heavy lifting is in app/data_access.py (where data comes from) and
+ml/ (how suggestions/fraud/etc. were built). This file is mostly layout + wiring.
+"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-import duckdb
 import plotly.express as px
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from app.auth import require_password
+from app.data_access import get_backend, resolve_backend_name
 from config import load_settings
 
 
 st.set_page_config(page_title="FinanceBuddy", page_icon="💰", layout="wide")
 
 
-@st.cache_resource
-def get_con(db_path: str):
-    return duckdb.connect(db_path, read_only=True)
+def _export_secrets_to_env() -> None:
+    # Streamlit Cloud puts config in st.secrets; boto3 still looks at os.environ.
+    import os
 
-
-def load_records(con, sql: str) -> list[dict]:
     try:
-        df = con.execute(sql).pl()
-        if df.is_empty():
-            return []
-        return df.to_dicts()
+        secrets = st.secrets  # type: ignore[attr-defined]
     except Exception:
-        return []
+        return
+    for key in (
+        "FINANCEBUDDY_BACKEND",
+        "FINANCEBUDDY_S3_BUCKET",
+        "FINANCEBUDDY_APP_PASSWORD",
+        "FINANCEBUDDY_ATHENA_S3_STAGING",
+        "FINANCEBUDDY_ATHENA_MARTS_SCHEMA",
+        "FINANCEBUDDY_ATHENA_WORKGROUP",
+        "FINANCEBUDDY_COACH_ENABLED",
+        "FINANCEBUDDY_BEDROCK_MODEL",
+        "FINANCEBUDDY_COACH_DAILY_LIMIT",
+        "AWS_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_PROFILE",
+    ):
+        try:
+            val = secrets.get(key)
+        except Exception:
+            val = None
+        if val and key not in os.environ:
+            os.environ[key] = str(val)
+
+
+@st.cache_resource
+def cached_backend(backend_name: str):
+    # cache_resource => one connection/client for the Streamlit process, not per rerun.
+    settings = load_settings()
+    return get_backend(settings)
 
 
 def main() -> None:
+    _export_secrets_to_env()
+    require_password()
     settings = load_settings()
-    db_path = settings["paths"]["duckdb"]
+    backend_name = resolve_backend_name(settings)
 
     st.title("FinanceBuddy")
     st.caption(
         "Personal finance coach on a synthetic lakehouse — habits, duplicate subscriptions, fraud, and savings ideas."
     )
 
-    if not Path(db_path).exists():
-        st.error("DuckDB database not found. Run: `python scripts/run_pipeline.py`")
+    try:
+        backend = cached_backend(backend_name)
+    except Exception as exc:
+        st.error(f"Could not start data backend `{backend_name}`: {exc}")
+        if backend_name == "duckdb":
+            st.info("Run: `python scripts/run_pipeline.py`")
+        else:
+            st.info(
+                "Set `FINANCEBUDDY_S3_BUCKET` and AWS credentials. "
+                "For Athena mode also ensure dbt `--target athena` has built marts."
+            )
         st.stop()
 
-    con = get_con(db_path)
-    users = load_records(
-        con,
-        "select user_id, display_name, city, state, persona, monthly_income from marts.dim_user order by user_id",
-    )
+    st.sidebar.markdown(f"**Data backend:** `{backend.name}`")
+    if backend.name in {"s3", "athena"}:
+        st.sidebar.caption(
+            "Live AWS path: gold marts on S3"
+            + ("; dbt marts via Athena with S3 fallback" if backend.name == "athena" else " (no per-click Athena scans)")
+        )
+
+    users = backend.list_users()
     if not users:
-        st.error("No users found. Run the pipeline first.")
+        st.error("No users found. Build/upload gold marts first.")
         st.stop()
 
-    sug_counts = load_records(con, "select user_id, count(*) as n from marts.mart_suggestions group by 1")
+    sug_counts = backend.suggestion_counts()
     default_idx = 0
     if sug_counts:
-        top_user = max(sug_counts, key=lambda r: r["n"])["user_id"]
+        top_user = max(sug_counts, key=lambda r: int(r["n"] or 0))["user_id"]
         for i, u in enumerate(users):
             if u["user_id"] == top_user:
                 default_idx = i
@@ -73,57 +116,19 @@ def main() -> None:
         format_func=lambda u: f"{u} — {user_map[u]['display_name']}",
     )
     user = user_map[user_id]
+    income = float(user["monthly_income"] or 0)
     st.sidebar.markdown(
         f"**Persona:** {user['persona']}  \n"
         f"**Location:** {user['city']}, {user['state']}  \n"
-        f"**Monthly income:** ${user['monthly_income']:,.0f}"
+        f"**Monthly income:** ${income:,.0f}"
     )
 
-    suggestions = load_records(
-        con,
-        f"""
-        select suggestion_type, title, reason, estimated_monthly_savings, confidence, priority_score
-        from marts.mart_suggestions
-        where user_id = '{user_id}'
-        order by priority_score desc
-        """,
-    )
-    cashflow = load_records(
-        con,
-        f"""
-        select cast(month_start as varchar) as month_start, category, spend, income
-        from marts.mart_monthly_cashflow
-        where user_id = '{user_id}'
-        """,
-    )
-    subs = load_records(
-        con,
-        f"""
-        select merchant_name, category, charge_count, avg_amount, avg_gap_days,
-               estimated_monthly_cost, is_subscription, price_increased
-        from marts.mart_subscriptions
-        where user_id = '{user_id}'
-        order by estimated_monthly_cost desc
-        """,
-    )
-    dup_subs = load_records(
-        con,
-        f"select * from marts.mart_duplicate_subscriptions where user_id = '{user_id}'",
-    )
-    habits = load_records(
-        con,
-        f"select * from marts.mart_habit_insights where user_id = '{user_id}' order by dollar_impact desc",
-    )
-    fraud = load_records(
-        con,
-        f"""
-        select cast(transaction_ts as varchar) as transaction_ts, merchant_name, amount_abs,
-               fraud_score, reason_codes, is_fraud_predicted
-        from marts.mart_fraud_scores
-        where user_id = '{user_id}' and is_fraud_predicted = 1
-        order by fraud_score desc
-        """,
-    )
+    suggestions = backend.suggestions(user_id)
+    cashflow = backend.cashflow(user_id)
+    subs = backend.subscriptions(user_id)
+    dup_subs = backend.duplicate_subscriptions(user_id)
+    habits = backend.habits(user_id)
+    fraud = backend.fraud_alerts(user_id)
 
     total_savings = sum(float(s.get("estimated_monthly_savings") or 0) for s in suggestions)
     c1, c2, c3, c4 = st.columns(4)
@@ -132,8 +137,8 @@ def main() -> None:
     c3.metric("Duplicate subscription groups", len(dup_subs))
     c4.metric("Fraud alerts", len(fraud))
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["Suggestions", "Cashflow", "Subscriptions", "Habits", "Fraud"]
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["Suggestions", "Cashflow", "Subscriptions", "Habits", "Fraud", "AI Coach"]
     )
 
     with tab1:
@@ -185,13 +190,89 @@ def main() -> None:
         else:
             st.dataframe(fraud, use_container_width=True, hide_index=True)
 
+    with tab6:
+        from ml.coach import build_coach_context, coach_enabled, run_coach
+
+        st.markdown(
+            "Grounded **Bedrock Claude** plan over this user's marts "
+            "(does not invent numbers). See `docs/coach.md`."
+        )
+        if not coach_enabled():
+            st.info(
+                "Coach is off. Set `FINANCEBUDDY_COACH_ENABLED=1`, enable Claude Haiku 4.5 in "
+                "Bedrock model access, and grant `bedrock:InvokeModel` / Converse."
+            )
+        else:
+            coach_cfg = settings.get("ml", {}).get("coach", {})
+            daily_limit = int(
+                __import__("os").getenv(
+                    "FINANCEBUDDY_COACH_DAILY_LIMIT",
+                    coach_cfg.get("daily_limit", 30),
+                )
+            )
+            if "coach_cache" not in st.session_state:
+                st.session_state["coach_cache"] = {}
+
+            if st.button("Generate plan", type="primary"):
+                context = build_coach_context(
+                    user=user,
+                    suggestions=suggestions,
+                    habits=habits,
+                    fraud=fraud,
+                    dup_subs=dup_subs,
+                    cashflow=cashflow,
+                )
+                with st.expander("Context sent to model (capped JSON)", expanded=False):
+                    st.json(context)
+                try:
+                    with st.spinner("Calling Bedrock..."):
+                        plan, meta = run_coach(
+                            context,
+                            artifacts_dir=settings["paths"]["ml_artifacts"],
+                            daily_limit=daily_limit,
+                            cache=st.session_state["coach_cache"],
+                        )
+                    st.session_state["coach_last"] = {"plan": plan, "meta": meta, "user_id": user_id}
+                except Exception as exc:
+                    st.error(str(exc))
+
+            last = st.session_state.get("coach_last")
+            if last and last.get("user_id") == user_id:
+                plan = last["plan"]
+                meta = last["meta"]
+                st.subheader("Summary")
+                st.write(plan.get("summary", ""))
+                if plan.get("actions"):
+                    st.subheader("Actions")
+                    st.dataframe(plan["actions"], use_container_width=True, hide_index=True)
+                if plan.get("risks"):
+                    st.subheader("Risks")
+                    st.dataframe(plan["risks"], use_container_width=True, hide_index=True)
+                if plan.get("disclaimers"):
+                    for d in plan["disclaimers"]:
+                        st.caption(d)
+                st.caption(
+                    f"model={meta.get('model_id')} | "
+                    f"tokens in/out={meta.get('input_tokens')}/{meta.get('output_tokens')} | "
+                    f"cache_hit={meta.get('cache_hit')} | "
+                    f"warnings={plan.get('harness_warnings')}"
+                )
+
     with st.expander("Architecture"):
         st.markdown(
-            """
-            Local path: **generator → S3-style lake → DuckDB bronze → dbt → ML → gold marts → Streamlit**.
+            f"""
+            **Active backend:** `{backend.name}`
 
-            AWS path: upload lake to **S3**, query with **Athena**, transform with **dbt-athena**,
-            train in **SageMaker** using the same `ml/` modules. See `docs/aws_deploy.md`.
+            - **duckdb** — local demo (`python scripts/run_pipeline.py`)
+            - **s3** — portfolio live path: Streamlit reads **gold Parquet on S3** (cheap, cached)
+            - **athena** — Streamlit queries **Glue/Athena** dbt marts; ML tables use S3 gold fallback
+            - **AI Coach** — optional Bedrock Claude Haiku over capped mart JSON (`docs/coach.md`)
+
+            Pipeline: generator → lake → **S3** → **dbt on Athena** → ML gold → this UI.
+
+            Cost guardrails: password auth, in-process cache, user-scoped queries, LIMITs,
+            prefer S3 for large fraud scores, coach daily call budget + response cache.
+            See `docs/live_demo.md`.
             """
         )
 

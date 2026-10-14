@@ -1,0 +1,10 @@
+# Full local pipeline: generator, DuckDB, dbt, ML
+-r requirements.txt
+duckdb>=1.0.0
+dbt-core>=1.8.0
+dbt-duckdb>=1.8.0
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+joblib>=1.3.0
+tqdm>=4.66.0
+tenacity>=8.2.0

@@ -1,5 +1,6 @@
+# Central knobs. Paths are resolved to absolute in config/__init__.py.
 project_name: financebuddy
-seed: 42
+seed: 42  # keep generator / eval reproducible
 
 generator:
   n_users: 250
@@ -11,7 +12,7 @@ paths:
   lake_root: data/lake
   raw: data/lake/raw
   bronze: data/lake/bronze
-  silver: data/lake/silver
+  silver: data/lake/silver  # folder exists; "silver" mostly means dbt staging/intermediate
   gold: data/lake/gold
   duckdb: data/financebuddy.duckdb
   ground_truth: data/lake/raw/ground_truth
@@ -20,15 +21,34 @@ paths:
 dbt:
   project_dir: dbt_financebuddy
   profiles_dir: dbt_financebuddy
-  target: local
+  target: local  # switch to athena in profiles when running cloud builds
 
 ml:
-  fraud_contamination: 0.02
+  fraud_contamination: 0.02  # IsolationForest expected anomaly share
   subscription_amount_tol: 0.08
   subscription_gap_days_min: 25
   subscription_gap_days_max: 40
   habit_lookback_days: 90
+  coach:
+    # Turn on with FINANCEBUDDY_COACH_ENABLED=1
+    model_id: anthropic.claude-haiku-4-5-20251001-v1:0
+    daily_limit: 30
+    max_tokens: 800
+    temperature: 0.2
 
 aws:
   region: us-east-1
   s3_prefix: financebuddy
+  bucket: ""  # usually FINANCEBUDDY_S3_BUCKET env instead
+  athena_s3_staging: ""
+  athena_workgroup: primary
+  streaming:
+    stream_name: financebuddy-txns
+    firehose_name: financebuddy-txns-to-s3
+    role_name: financebuddy-firehose-role
+    s3_prefix: financebuddy/raw/stream/
+
+# duckdb | s3 | athena — override with FINANCEBUDDY_BACKEND
+app:
+  backend: duckdb
+  athena_marts_database: marts

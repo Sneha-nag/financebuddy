@@ -1,47 +1,81 @@
 # Architecture
 
-## Local (default)
+This is the mental model I use when navigating the repo. Nothing here is production banking infra — it’s a learning lakehouse with a UI on top.
 
-```text
-generator (Python)
-    -> data/lake/raw   (CSV landing zone)
-    -> data/lake/bronze (Parquet)
-    -> DuckDB bronze.* tables
-    -> dbt (staging / intermediate / marts)
-    -> ml/ (habits, fraud, duplicate charges, suggestions)
-    -> data/lake/gold + DuckDB marts.*
-    -> Streamlit app
+## Big picture
+
+```mermaid
+flowchart TB
+  subgraph ingest ["1. Ingest"]
+    GEN[Python generator]
+    GEN -->|batch| RAW[raw CSV]
+    GEN -->|typed| BRZ[bronze Parquet]
+    PROD[stream_produce.py] -->|optional| KIN[Kinesis]
+    KIN --> FH[Firehose]
+    FH -->|gzip JSON lines| S3RAW[S3 raw/stream]
+  end
+
+  subgraph transform ["2. Transform"]
+    BRZ --> LOAD[load_bronze.py]
+    LOAD --> DDB[(DuckDB)]
+    DDB --> DBT[dbt: staging / intermediate / marts]
+    BRZ -->|upload| S3[(S3)]
+    S3 --> ATH[Athena + dbt-athena]
+  end
+
+  subgraph score ["3. Score"]
+    DBT --> SUB[subscriptions.py]
+    DBT --> HAB[habits.py]
+    DBT --> FR[fraud.py]
+    SUB --> SUG[suggestions.py]
+    HAB --> SUG
+    FR --> SUG
+    SUG --> GOLD[gold Parquet + marts tables]
+  end
+
+  subgraph serve ["4. Serve"]
+    GOLD --> ST[Streamlit]
+    S3 -->|backend=s3| ST
+    ATH -->|backend=athena| ST
+    ST -->|optional| BED[Bedrock Haiku coach]
+  end
 ```
 
-## AWS (optional)
+## Why DuckDB and Athena both exist
 
-```text
-generator / local pipeline
-    -> S3://bucket/financebuddy/{raw,bronze,gold}/
-    -> Glue Data Catalog tables
-    -> Athena SQL + dbt-athena
-    -> SageMaker Studio (same ml/ scripts)
-    -> Streamlit locally or App Runner
-```
+DuckDB is the “warehouse on my laptop.” Same dbt project, different `--target`. Athena is the cloud twin once bronze/gold live on S3. Streamlit can read either DuckDB or S3 gold (S3 is what I’d use for a public demo so I’m not scanning Athena on every sidebar click).
 
-## Medallion layers
+## Medallion-ish layers
 
-| Layer | Contents |
-|---|---|
-| raw | CSV dumps as landed |
-| bronze | Typed Parquet users / transactions / merchants |
-| silver | dbt staging + intermediate (normalized merchants, recurring gaps) |
-| gold | marts: cashflow, subscriptions, duplicates, habits, fraud, suggestions |
+| Layer | What’s there | Notes |
+|-------|----------------|-------|
+| **raw** | CSV + ground_truth JSON/Parquet | Landing zone; ugly is fine |
+| **bronze** | Typed Parquet (`users`, `transactions`, `merchants`) | What dbt sources read |
+| **silver** | Mostly lives as dbt staging/intermediate in the warehouse | Folder exists; not a separate heavy Parquet pipeline |
+| **gold** | Marts people actually query / the UI shows | Cashflow, subs, fraud scores, suggestions, … |
 
-## Planted signals (ground truth)
+## Planted signals
 
-The generator hides known cases so you can measure recovery:
+The generator hides known cases so `ml/evaluate_ground_truth.py` can score recovery later:
 
-- Duplicate music / cloud subscriptions
-- Netflix price creep
-- Same-merchant double charges
-- Card-test micro-auth bursts + large new-geo charges
-- Weekend dining spikes (spender persona)
-- Seasonal travel bursts
+- Overlapping music / cloud subscriptions  
+- Subscription price creep  
+- Same-merchant double charges  
+- Micro-auth bursts + odd geo charges (fraud-ish)  
+- Persona-driven spend spikes  
 
-See `ml/artifacts/ground_truth_recovery.json` after `run_pipeline.py`.
+After a full pipeline run, check `ml/artifacts/ground_truth_recovery.json`.
+
+## App backends
+
+Controlled by `FINANCEBUDDY_BACKEND` (or `app.backend` in settings):
+
+| Value | Reads from | When I use it |
+|-------|------------|----------------|
+| `duckdb` | local `data/financebuddy.duckdb` | day-to-day hacking |
+| `s3` | `s3://…/financebuddy/gold/*.parquet` | portfolio / live demo |
+| `athena` | Glue `marts` DB, falls back to S3 for ML-only tables | showing SQL-on-lake |
+
+## Streaming vs batch
+
+Batch is the main path (`run_pipeline.py`). Streaming is a side lesson: prove events can land in the lake without pretending the whole ML stack is real-time. Always run `stream_teardown.py` after playing — idle Kinesis shards are an easy way to waste money.

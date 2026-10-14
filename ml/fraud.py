@@ -1,4 +1,10 @@
-"""Fraud / anomaly scoring with Isolation Forest + rule-based reason codes."""
+"""
+Fraud-ish scoring.
+
+Isolation Forest picks odd rows; we also attach simple reason codes (new city,
+micro-auth burst, …) so the UI isn't just a mysterious score. Labels from the
+generator are only used for offline metrics — the model itself is unsupervised.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
 
+# Keep this list in sync with _build_features — it's what the model actually sees.
 FEATURE_COLS = [
     "amount_abs",
     "log_amount",
@@ -29,6 +36,7 @@ FEATURE_COLS = [
 
 
 def _build_features(tx: pl.DataFrame) -> pl.DataFrame:
+    # Window stuff is per-user and order-sensitive, so sort before cum_count.
     df = tx.with_columns(
         pl.col("transaction_ts").str.to_datetime().alias("transaction_ts"),
         pl.col("posted_date").str.to_date().alias("posted_date"),
@@ -37,6 +45,7 @@ def _build_features(tx: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns(
         pl.col("transaction_ts").dt.hour().alias("hour"),
         pl.col("amount_abs").log1p().alias("log_amount"),
+        # Tiny charges show up in card-testing patterns we plant in the generator.
         (pl.col("amount_abs") <= 2.5).cast(pl.Int8).alias("micro_auth"),
     ).with_columns(
         ((pl.col("hour") < 6) | (pl.col("hour") >= 23)).cast(pl.Int8).alias("is_night"),
@@ -47,6 +56,7 @@ def _build_features(tx: pl.DataFrame) -> pl.DataFrame:
     ).with_columns(
         (pl.col("merchant_seen") == 1).cast(pl.Int8).alias("is_new_merchant"),
         (pl.col("city_seen") == 1).cast(pl.Int8).alias("is_new_city"),
+        # Rare merchants across the whole book get a higher rarity score.
         (1.0 / pl.col("merchant_count")).alias("merchant_rarity"),
         (pl.col("amount_abs") - pl.col("user_median")).abs().median().over("user_id").alias("user_mad"),
     ).with_columns(

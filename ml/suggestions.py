@@ -1,4 +1,9 @@
-"""Ranked, explainable improvement suggestions."""
+"""
+Turn mart findings into a single ranked suggestions table for the UI.
+
+Nothing fancy — each signal type (dup sub, price creep, fraud, …) becomes a row
+with an estimated monthly savings and a priority_score we can sort on.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ def build_suggestions(duckdb_path: str) -> pl.DataFrame:
     con = duckdb.connect(duckdb_path, read_only=True)
 
     def safe_df(sql: str) -> pl.DataFrame:
+        # Pipeline order can vary; missing marts shouldn't crash the whole build.
         try:
             return con.execute(sql).pl()
         except Exception:

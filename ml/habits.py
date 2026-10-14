@@ -1,4 +1,8 @@
-"""Habit and spending-pattern insights vs each user's own history."""
+"""
+Habit insights = "this month vs your usual," not vs the population.
+
+If dining is 2x your own history, that matters more than being average for the city.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ def compute_habit_insights(duckdb_path: str, lookback_days: int = 90) -> pl.Data
 
     cashflow = cashflow.with_columns(pl.col("month_start").cast(pl.Date))
     latest_month = cashflow["month_start"].max()
+    # Compare the newest month to prior months for the same user+category.
     recent = cashflow.filter(pl.col("month_start") == latest_month)
     history = cashflow.filter(pl.col("month_start") < latest_month)
 

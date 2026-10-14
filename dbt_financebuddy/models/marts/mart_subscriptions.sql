@@ -1,3 +1,6 @@
+-- Rough subscription detector: same merchant, gaps that look ~monthly.
+-- Not trying to be Plaid — just good enough for the demo marts / UI.
+
 with candidates as (
     select * from {{ ref('int_recurring_candidates') }}
 ),
@@ -18,6 +21,7 @@ stats as (
         max(posted_date) as last_seen,
         max(case when planted_tag = 'price_creep' then 1 else 0 end) as has_price_creep_tag
     from candidates
+    -- Keep ~monthly gaps; null gaps sneak in for the first charge in a series.
     where gap_days between 25 and 40
        or gap_days is null
     group by 1, 2
@@ -31,6 +35,7 @@ labeled as (
             when charge_count >= 3 and avg_gap_days is null then false
             else false
         end as is_subscription,
+        -- 20%+ swing between min/max on a subscription-looking series => price creep.
         case
             when charge_count >= 3
              and avg_gap_days between 25 and 40

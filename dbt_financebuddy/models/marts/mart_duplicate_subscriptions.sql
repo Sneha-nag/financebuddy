@@ -1,10 +1,12 @@
+-- Flag people paying for two services that do the same job (Spotify + Apple Music, etc).
+
 with subs as (
     select *
     from {{ ref('mart_subscriptions') }}
     where is_subscription
 ),
 
--- Map merchants into overlap groups (music, cloud storage, etc.)
+-- Hand-mapped groups on purpose — keeps the demo obvious and explainable.
 grouped as (
     select
         *,
@@ -21,8 +23,8 @@ dupes as (
     select
         user_id,
         overlap_group,
-        list(merchant_name) as merchant_names,
-        list(merchant_id) as merchant_ids,
+        array_agg(merchant_name) as merchant_names,
+        array_agg(merchant_id) as merchant_ids,
         count(*) as service_count,
         round(sum(estimated_monthly_cost), 2) as combined_monthly_cost,
         round(sum(estimated_monthly_cost) - min(estimated_monthly_cost), 2) as potential_monthly_savings

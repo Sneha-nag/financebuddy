@@ -1,3 +1,6 @@
+-- Charge series per user+merchant plus gap_days between them.
+-- mart_subscriptions rolls this up into "looks monthly."
+
 with tx as (
     select *
     from {{ ref('int_merchant_normalized') }}

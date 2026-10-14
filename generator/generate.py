@@ -1,4 +1,10 @@
-"""Generate synthetic personal-finance ledgers with planted ground truth."""
+"""
+Synthetic bank ledgers.
+
+Most rows are boring on purpose. A minority get "planted" events (dup subs,
+fraud bursts, price creep) so later ML/dbt steps have something measurable to find.
+We write those plants to ground_truth/ for offline eval.
+"""
 
 from __future__ import annotations
 
@@ -28,6 +34,8 @@ CITIES = [
 
 @dataclass
 class PlantedEvent:
+    """One intentional anomaly we hope the pipeline recovers later."""
+
     user_id: str
     event_type: str
     description: str
@@ -50,6 +58,7 @@ def _make_users(n_users: int, rng: np.random.Generator) -> pl.DataFrame:
         city, state = CITIES[i % len(CITIES)]
         income = float(rng.normal(4200, 900))
         income = max(2800.0, min(9000.0, income))
+        # Personas nudge spend patterns (e.g. spenders get more dining spikes).
         persona = str(rng.choice(["saver", "spender", "balanced"], p=[0.25, 0.35, 0.40]))
         rows.append(
             {

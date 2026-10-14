@@ -3,7 +3,8 @@ version: 2
 sources:
   - name: bronze
     description: Typed Parquet landing tables produced by the generator / ingest step.
-    schema: bronze
+    # Local DuckDB uses schema bronze; Athena tables live in database financebuddy
+    schema: "{{ 'financebuddy' if target.name == 'athena' else 'bronze' }}"
     tables:
       - name: users
         columns:

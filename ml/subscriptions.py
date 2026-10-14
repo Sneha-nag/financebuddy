@@ -1,4 +1,9 @@
-"""Enrich subscription marts and detect same-cycle duplicate charges."""
+"""
+Subscription helpers on top of the dbt marts.
+
+dbt finds "looks monthly" merchants. This module adds same-merchant double-charge
+detection (two similar amounts within a couple of days) and writes gold Parquet.
+"""
 
 from __future__ import annotations
 
@@ -26,12 +31,13 @@ def detect_duplicate_charges(duckdb_path: str) -> pl.DataFrame:
     tx = tx.with_columns(pl.col("transaction_ts").str.to_datetime())
     rows = []
     for keys, grp in tx.group_by(["user_id", "merchant_id"], maintain_order=True):
-        # keys may be tuple depending on polars version
+        # Walk each user+merchant timeline; flag near-duplicate pairs.
         grp = grp.sort("transaction_ts")
         prev = None
         for row in grp.iter_rows(named=True):
             if prev is not None:
                 hours = (row["transaction_ts"] - prev["transaction_ts"]).total_seconds() / 3600.0
+                # Allow a little amount drift (tips / FX noise) without matching everything.
                 amt_close = abs(row["amount_abs"] - prev["amount_abs"]) <= max(0.5, 0.02 * prev["amount_abs"])
                 if hours <= 72 and amt_close:
                     rows.append(

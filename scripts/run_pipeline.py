@@ -1,4 +1,10 @@
-"""End-to-end local pipeline: generate -> load -> dbt -> ML -> suggestions."""
+"""
+One command for the local path.
+
+Order matters: bronze has to exist before dbt, marts have to exist before ML,
+suggestions need the ML tables. If something fails mid-way, re-run after fixing —
+most steps are idempotent enough for hacking.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +29,7 @@ from ml.suggestions import write_suggestions
 def run_dbt(settings: dict) -> None:
     project_dir = ROOT / settings["dbt"]["project_dir"]
     profiles_dir = ROOT / settings["dbt"]["profiles_dir"]
+    # Prefer the venv's dbt on Windows so we don't accidentally hit a global install.
     dbt_exe = ROOT / ".venv" / "Scripts" / "dbt.exe"
     dbt_bin = str(dbt_exe) if dbt_exe.exists() else "dbt"
     cmd = [
