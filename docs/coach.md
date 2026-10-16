@@ -27,7 +27,13 @@ Haiku 4.5 needs the `us.` inference profile ID (not the bare foundation-model ID
 - Cite validation against strings present in the context
 - In-process cache by context hash (no repeat Bedrock $ on re-click)
 - Daily call budget file: `ml/artifacts/coach_daily_budget.json` (default 30)
+- Per-browser-session call cap (`FINANCEBUDDY_COACH_SESSION_LIMIT`, default 2; `0` = unlimited). Cache hits do not count. Resets when the Streamlit session ends (new tab / refresh after timeout).
 
 ## Cost
 
-Haiku + small prompts is usually cents per demo session. Keep the daily limit low for portfolio hosting.
+Haiku + small prompts is usually cents per demo session. For a public portfolio demo, keep both limits low, e.g.:
+
+```bash
+FINANCEBUDDY_COACH_DAILY_LIMIT=15
+FINANCEBUDDY_COACH_SESSION_LIMIT=2
+```

@@ -109,12 +109,19 @@ Leave `FINANCEBUDDY_COACH_ENABLED` unset on the public app unless you also grant
 4. **Advanced settings → Secrets** (TOML):
 
    ```toml
-   FINANCEBUDDY_APP_PASSWORD = "pick-a-demo-password"
+   FINANCEBUDDY_APP_PASSWORD = "D3MOTRY@OUT"
+   # Optional; shown beside the login box (defaults to D3MOTRY@OUT in the app)
+   # FINANCEBUDDY_APP_PASSWORD_HINT = "D3MOTRY@OUT"
    FINANCEBUDDY_BACKEND = "s3"
    FINANCEBUDDY_S3_BUCKET = "financebuddy-sneha"
    AWS_REGION = "us-east-1"
    AWS_ACCESS_KEY_ID = "AKIA..."
    AWS_SECRET_ACCESS_KEY = "..."
+   # Optional coach (also grant Bedrock on the IAM user):
+   # FINANCEBUDDY_COACH_ENABLED = "1"
+   # FINANCEBUDDY_BEDROCK_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+   # FINANCEBUDDY_COACH_DAILY_LIMIT = "15"
+   # FINANCEBUDDY_COACH_SESSION_LIMIT = "2"
    ```
 
 5. Deploy. First build installs lean `requirements.txt` (a few minutes).
@@ -130,6 +137,7 @@ If the app errors on S3, check the Cloud logs, that gold still exists under `s3:
 - SQL `LIMIT`s on Athena paths
 - Large fraud mart prefers **S3 filter** even in Athena mode
 - Prefer **`s3` backend** for the public demo URL; use `athena` when you want to show SQL-on-Glue live
+- Coach: daily call budget + per-browser-session cap (`FINANCEBUDDY_COACH_SESSION_LIMIT`) + response cache
 
 ## IAM sketch (demo user)
 

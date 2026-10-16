@@ -28,12 +28,14 @@ _SECRET_KEYS = (
     "FINANCEBUDDY_BACKEND",
     "FINANCEBUDDY_S3_BUCKET",
     "FINANCEBUDDY_APP_PASSWORD",
+    "FINANCEBUDDY_APP_PASSWORD_HINT",
     "FINANCEBUDDY_ATHENA_S3_STAGING",
     "FINANCEBUDDY_ATHENA_MARTS_SCHEMA",
     "FINANCEBUDDY_ATHENA_WORKGROUP",
     "FINANCEBUDDY_COACH_ENABLED",
     "FINANCEBUDDY_BEDROCK_MODEL",
     "FINANCEBUDDY_COACH_DAILY_LIMIT",
+    "FINANCEBUDDY_COACH_SESSION_LIMIT",
     "AWS_REGION",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -273,38 +275,66 @@ def main() -> None:
                 "Bedrock model access, and grant `bedrock:InvokeModel` / Converse."
             )
         else:
+            import os
+
             coach_cfg = settings.get("ml", {}).get("coach", {})
             daily_limit = int(
-                __import__("os").getenv(
+                os.getenv(
                     "FINANCEBUDDY_COACH_DAILY_LIMIT",
                     coach_cfg.get("daily_limit", 30),
                 )
             )
+            # 0 = unlimited. Browser session only (resets on new tab / logout).
+            session_limit = int(
+                os.getenv(
+                    "FINANCEBUDDY_COACH_SESSION_LIMIT",
+                    coach_cfg.get("session_limit", 2),
+                )
+            )
             if "coach_cache" not in st.session_state:
                 st.session_state["coach_cache"] = {}
+            if "coach_session_calls" not in st.session_state:
+                st.session_state["coach_session_calls"] = 0
+
+            used = int(st.session_state["coach_session_calls"])
+            if session_limit > 0:
+                st.caption(f"Session coach calls: {used} / {session_limit}")
 
             if st.button("Generate plan", type="primary"):
-                context = build_coach_context(
-                    user=user,
-                    suggestions=suggestions,
-                    habits=habits,
-                    fraud=fraud,
-                    dup_subs=dup_subs,
-                    cashflow=cashflow,
-                )
-                with st.expander("Context sent to model (capped JSON)", expanded=False):
-                    st.json(context)
-                try:
-                    with st.spinner("Calling Bedrock..."):
-                        plan, meta = run_coach(
-                            context,
-                            artifacts_dir=settings["paths"]["ml_artifacts"],
-                            daily_limit=daily_limit,
-                            cache=st.session_state["coach_cache"],
-                        )
-                    st.session_state["coach_last"] = {"plan": plan, "meta": meta, "user_id": user_id}
-                except Exception as exc:
-                    st.error(str(exc))
+                if session_limit > 0 and used >= session_limit:
+                    st.error(
+                        f"Session coach limit reached ({session_limit} Bedrock calls). "
+                        "Refresh the page or open a new browser session to try again."
+                    )
+                else:
+                    context = build_coach_context(
+                        user=user,
+                        suggestions=suggestions,
+                        habits=habits,
+                        fraud=fraud,
+                        dup_subs=dup_subs,
+                        cashflow=cashflow,
+                    )
+                    with st.expander("Context sent to model (capped JSON)", expanded=False):
+                        st.json(context)
+                    try:
+                        with st.spinner("Calling Bedrock..."):
+                            plan, meta = run_coach(
+                                context,
+                                artifacts_dir=settings["paths"]["ml_artifacts"],
+                                daily_limit=daily_limit,
+                                cache=st.session_state["coach_cache"],
+                            )
+                        # Cache hits do not burn the session budget.
+                        if not meta.get("cache_hit"):
+                            st.session_state["coach_session_calls"] = used + 1
+                        st.session_state["coach_last"] = {
+                            "plan": plan,
+                            "meta": meta,
+                            "user_id": user_id,
+                        }
+                    except Exception as exc:
+                        st.error(str(exc))
 
             last = st.session_state.get("coach_last")
             if last and last.get("user_id") == user_id:
@@ -325,7 +355,9 @@ def main() -> None:
                     f"model={meta.get('model_id')} | "
                     f"tokens in/out={meta.get('input_tokens')}/{meta.get('output_tokens')} | "
                     f"cache_hit={meta.get('cache_hit')} | "
-                    f"warnings={plan.get('harness_warnings')}"
+                    f"session={st.session_state['coach_session_calls']}"
+                    + (f"/{session_limit}" if session_limit > 0 else "")
+                    + f" | warnings={plan.get('harness_warnings')}"
                 )
 
     with st.expander("Architecture"):
@@ -341,7 +373,7 @@ def main() -> None:
             Pipeline: generator → lake → **S3** → **dbt on Athena** → ML gold → this UI.
 
             Cost guardrails: password auth, in-process cache, user-scoped queries, LIMITs,
-            prefer S3 for large fraud scores, coach daily call budget + response cache.
+            prefer S3 for large fraud scores, coach daily + per-session call budgets + response cache.
             See `docs/live_demo.md`.
             """
         )
