@@ -28,3 +28,4 @@ ml/artifacts/*.json
 .vscode/
 *.swp
 dbt_financebuddy/.user.yml
+cursorrules.txt
