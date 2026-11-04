@@ -122,6 +122,8 @@ Leave `FINANCEBUDDY_COACH_ENABLED` unset on the public app unless you also grant
    # FINANCEBUDDY_BEDROCK_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
    # FINANCEBUDDY_COACH_DAILY_LIMIT = "15"
    # FINANCEBUDDY_COACH_SESSION_LIMIT = "2"
+   # FINANCEBUDDY_BEDROCK_GUARDRAIL_ID = "id-from-create_bedrock_guardrail.py"
+   # FINANCEBUDDY_BEDROCK_GUARDRAIL_VERSION = "1"
    ```
 
 5. Deploy. First build installs lean `requirements.txt` (a few minutes).

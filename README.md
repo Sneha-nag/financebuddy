@@ -111,7 +111,7 @@ Details: [docs/streaming.md](docs/streaming.md).
 
 ### Bedrock coach (optional)
 
-The AI Coach tab only sees a **capped JSON pack** from the marts. It shouldn’t invent merchants or dollar amounts; the harness strips citations that aren’t in the context. Enable notes: [docs/coach.md](docs/coach.md).
+The AI Coach tab only sees a **capped JSON pack** from the marts. It shouldn’t invent merchants or dollar amounts; the harness strips citations that aren’t in the context. When `FINANCEBUDDY_BEDROCK_GUARDRAIL_ID` is set, a Bedrock Guardrail also blocks ungrounded replies, investment picks, tax advice, and licensed-advice claims. Enable notes: [docs/coach.md](docs/coach.md).
 
 ```bash
 set FINANCEBUDDY_COACH_ENABLED=1

@@ -16,12 +16,21 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ml.bedrock_guardrail import (
+    GuardrailBlocked,
+    coach_message_content,
+    grounding_scores,
+    guardrail_config_from_env,
+    raise_if_guardrail_blocked,
+)
+
 USER_ID_RE = re.compile(r"^u_\d{4}$")
 
 # Keep this strict. Loose prompts are how you get invented merchants and fake $.
 SYSTEM_PROMPT = """You are FinanceBuddy Coach for a SYNTHETIC personal-finance demo.
 You are NOT a licensed advisor. Do not invent numbers, merchants, or transactions.
 Use ONLY the JSON context provided by the user message.
+Every action must restate a fact from that JSON. Do not add reminders, lifestyle tips, or risks the JSON does not state.
 If something is missing, say you do not know.
 Return ONLY valid JSON (no markdown) matching this schema:
 {
@@ -387,20 +396,24 @@ def _converse_text(
     messages: list[dict],
     max_tokens: int,
     temperature: float,
-) -> tuple[str, dict]:
-    resp = client.converse(
-        modelId=model_id,
-        system=[{"text": system}],
-        messages=messages,
-        inferenceConfig={
+    guardrail: dict[str, str] | None = None,
+) -> tuple[str, dict, str | None, dict]:
+    kwargs: dict[str, Any] = {
+        "modelId": model_id,
+        "system": [{"text": system}],
+        "messages": messages,
+        "inferenceConfig": {
             "maxTokens": max_tokens,
             "temperature": temperature,
         },
-    )
+    }
+    if guardrail:
+        kwargs["guardrailConfig"] = guardrail
+    resp = client.converse(**kwargs)
     parts = resp.get("output", {}).get("message", {}).get("content", [])
     text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
     usage = resp.get("usage") or {}
-    return text, usage
+    return text, usage, resp.get("stopReason"), resp.get("trace") or {}
 
 
 def invoke_bedrock_coach(
@@ -428,24 +441,33 @@ def invoke_bedrock_coach(
         else boto3.Session(region_name=region)
     )
     client = session.client("bedrock-runtime")
-
-    user_msg = (
+    guardrail = guardrail_config_from_env()
+    grounding_text = json.dumps(context, default=str)
+    instruction = (
         "Create a grounded action plan from this FinanceBuddy mart context JSON.\n"
-        "Reply with ONE JSON object only — no markdown, no commentary.\n"
-        + json.dumps(context, default=str)
+        "Reply with ONE JSON object only — no markdown, no commentary."
     )
-    messages: list[dict] = [{"role": "user", "content": [{"text": user_msg}]}]
+    messages: list[dict] = [
+        {
+            "role": "user",
+            "content": coach_message_content(
+                instruction, grounding_text, guardrail=guardrail is not None
+            ),
+        }
+    ]
 
-    text, usage = _converse_text(
+    text, usage, stop_reason, trace = _converse_text(
         client,
         model_id=model_id,
         system=SYSTEM_PROMPT,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
+        guardrail=guardrail,
     )
     input_tokens = int(usage.get("inputTokens") or 0)
     output_tokens = int(usage.get("outputTokens") or 0)
+    raise_if_guardrail_blocked(stop_reason, trace)
     repaired = False
     parse_error: Exception | None = None
 
@@ -454,40 +476,43 @@ def invoke_bedrock_coach(
     except Exception as exc:  # noqa: BLE001
         parse_error = exc
         # Second try: ask the model to fix its own JSON (cheap, usually works).
+        repair_instruction = (
+            "Your previous reply was not valid JSON "
+            f"({type(exc).__name__}: {exc}). "
+            "Return ONLY a corrected JSON object matching the required schema. "
+            "No markdown fences, no trailing commas, no commentary."
+        )
         repair_messages = messages + [
             {"role": "assistant", "content": [{"text": text}]},
             {
                 "role": "user",
-                "content": [
-                    {
-                        "text": (
-                            "Your previous reply was not valid JSON "
-                            f"({type(exc).__name__}: {exc}). "
-                            "Return ONLY a corrected JSON object matching the required schema. "
-                            "No markdown fences, no trailing commas, no commentary."
-                        )
-                    }
-                ],
+                "content": coach_message_content(
+                    repair_instruction, grounding_text, guardrail=guardrail is not None
+                ),
             },
         ]
-        text2, usage2 = _converse_text(
+        text2, usage2, stop_reason2, trace2 = _converse_text(
             client,
             model_id=model_id,
             system=SYSTEM_PROMPT,
             messages=repair_messages,
             max_tokens=max_tokens,
             temperature=0.0,
+            guardrail=guardrail,
         )
         input_tokens += int(usage2.get("inputTokens") or 0)
         output_tokens += int(usage2.get("outputTokens") or 0)
         text = text2
+        trace = trace2
         repaired = True
+        raise_if_guardrail_blocked(stop_reason2, trace2)
         plan_obj = extract_json_object(text)
 
     plan = validate_coach_response(plan_obj, context)
     if parse_error is not None:
         plan.setdefault("harness_warnings", []).append(f"json_repair_retry:{type(parse_error).__name__}")
 
+    scores = grounding_scores(trace)
     meta = {
         "model_id": model_id,
         "input_tokens": input_tokens,
@@ -495,6 +520,10 @@ def invoke_bedrock_coach(
         "context_hash": context_hash(context),
         "raw_chars": len(text),
         "json_repaired": repaired,
+        "guardrail_id": guardrail["guardrailIdentifier"] if guardrail else None,
+        "guardrail_version": guardrail["guardrailVersion"] if guardrail else None,
+        "grounding_score": scores.get("grounding"),
+        "relevance_score": scores.get("relevance"),
     }
     return plan, meta
 
@@ -526,7 +555,11 @@ def run_coach(
     if budget.remaining() <= 0:
         raise RuntimeError(f"Daily Bedrock coach limit reached ({daily_limit} calls).")
 
-    plan, meta = invoke_bedrock_coach(context)
+    try:
+        plan, meta = invoke_bedrock_coach(context)
+    except GuardrailBlocked:
+        budget.consume()
+        raise
     budget.consume()
     meta = {**meta, "cache_hit": False, "daily_remaining": budget.remaining()}
     if cache is not None:

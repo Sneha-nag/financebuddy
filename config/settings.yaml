@@ -37,6 +37,14 @@ ml:
     session_limit: 2
     max_tokens: 800
     temperature: 0.2
+    # Bedrock Guardrail. Create it with scripts/create_bedrock_guardrail.py.
+    # The id and version live in the environment, not here.
+    guardrail:
+      name: financebuddy-coach
+      # A faithful plan scores about 0.5. An off-topic reply scores under 0.1.
+      # 0.7 blocked faithful plans. Relevance is omitted; it blocked them too.
+      grounding_threshold: 0.3
+      prompt_attack_strength: MEDIUM
 
 aws:
   region: us-east-1

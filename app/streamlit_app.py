@@ -36,6 +36,8 @@ _SECRET_KEYS = (
     "FINANCEBUDDY_BEDROCK_MODEL",
     "FINANCEBUDDY_COACH_DAILY_LIMIT",
     "FINANCEBUDDY_COACH_SESSION_LIMIT",
+    "FINANCEBUDDY_BEDROCK_GUARDRAIL_ID",
+    "FINANCEBUDDY_BEDROCK_GUARDRAIL_VERSION",
     "AWS_REGION",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -263,6 +265,7 @@ def main() -> None:
             st.dataframe(fraud, use_container_width=True, hide_index=True)
 
     with tab6:
+        from ml.bedrock_guardrail import guardrail_config_from_env
         from ml.coach import build_coach_context, coach_enabled, run_coach
 
         st.markdown(
@@ -299,6 +302,18 @@ def main() -> None:
             used = int(st.session_state["coach_session_calls"])
             if session_limit > 0:
                 st.caption(f"Session coach calls: {used} / {session_limit}")
+            guardrail_cfg = guardrail_config_from_env()
+            if guardrail_cfg:
+                st.caption(
+                    "Bedrock Guardrail "
+                    f"`{guardrail_cfg['guardrailIdentifier']}` "
+                    f"version `{guardrail_cfg['guardrailVersion']}`."
+                )
+            else:
+                st.caption(
+                    "Bedrock Guardrail is off. Run `scripts/create_bedrock_guardrail.py` "
+                    "and set FINANCEBUDDY_BEDROCK_GUARDRAIL_ID."
+                )
 
             if st.button("Generate plan", type="primary"):
                 if session_limit > 0 and used >= session_limit:
@@ -355,6 +370,9 @@ def main() -> None:
                     f"model={meta.get('model_id')} | "
                     f"tokens in/out={meta.get('input_tokens')}/{meta.get('output_tokens')} | "
                     f"cache_hit={meta.get('cache_hit')} | "
+                    f"guardrail={meta.get('guardrail_id') or 'off'}"
+                    f"@{meta.get('guardrail_version') or '-'} | "
+                    f"grounding={meta.get('grounding_score')} | "
                     f"session={st.session_state['coach_session_calls']}"
                     + (f"/{session_limit}" if session_limit > 0 else "")
                     + f" | warnings={plan.get('harness_warnings')}"
