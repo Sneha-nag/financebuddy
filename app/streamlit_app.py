@@ -378,24 +378,5 @@ def main() -> None:
                     + f" | warnings={plan.get('harness_warnings')}"
                 )
 
-    with st.expander("Architecture"):
-        st.markdown(
-            f"""
-            **Active backend:** `{backend.name}`
-
-            - **duckdb** — local demo (`python scripts/run_pipeline.py`)
-            - **s3** — portfolio live path: Streamlit reads **gold Parquet on S3** (cheap, cached)
-            - **athena** — Streamlit queries **Glue/Athena** dbt marts; ML tables use S3 gold fallback
-            - **AI Coach** — optional Bedrock Claude Haiku over capped mart JSON (`docs/coach.md`)
-
-            Pipeline: generator → lake → **S3** → **dbt on Athena** → ML gold → this UI.
-
-            Cost guardrails: password auth, in-process cache, user-scoped queries, LIMITs,
-            prefer S3 for large fraud scores, coach daily + per-session call budgets + response cache.
-            See `docs/live_demo.md`.
-            """
-        )
-
-
 if __name__ == "__main__":
     main()

@@ -18,9 +18,9 @@ flowchart TB
   subgraph transform ["2. Transform"]
     BRZ --> LOAD[load_bronze.py]
     LOAD --> DDB[(DuckDB)]
-    DDB --> DBT[dbt: staging / intermediate / marts]
+    DDB --> DBT[dbt silver: staging / intermediate]
     BRZ -->|upload| S3[(S3)]
-    S3 --> ATH[Athena + dbt-athena]
+    S3 --> ATH[Athena + dbt silver]
   end
 
   subgraph score ["3. Score"]

@@ -14,7 +14,7 @@ flowchart LR
     G[generator] --> R[raw CSV]
     R --> B[bronze Parquet]
     B --> D[(DuckDB)]
-    D --> DBT[dbt models]
+    D --> DBT[dbt silver: staging / intermediate]
     DBT --> ML[ml scoring]
     ML --> GOLD[gold marts]
     GOLD --> UI[Streamlit]
@@ -22,7 +22,7 @@ flowchart LR
 
   subgraph aws ["Optional AWS"]
     B -->|upload| S3[(S3 lake)]
-    S3 --> ATH[Athena + dbt]
+    S3 --> ATH[Athena + dbt silver]
     GOLD -->|upload| S3
     S3 --> UI
     P[stream producer] --> K[Kinesis]
@@ -38,7 +38,7 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 - Builds ~250 users × ~18 months of transactions (configurable in `config/settings.yaml`)
 - Plants ground truth (dup subscriptions, price creep, fraud-ish bursts, etc.) so eval isn’t vibes-only
-- dbt staging → intermediate → marts (cashflow, subscriptions, duplicates, …)
+- dbt silver (staging → intermediate) then marts (cashflow, subscriptions, duplicates, …)
 - ML: recurring charges, habits vs your own history, Isolation Forest fraud + reason codes, ranked suggestions
 - Streamlit: pick a user, poke around, optional AI Coach tab
 - Optional: push lake to S3, run dbt on Athena, stream a few hundred events through Kinesis
@@ -60,7 +60,7 @@ streamlit run app/streamlit_app.py
 
 Polars is used instead of Pandas — partly preference, partly because Pandas has been flaky under some Windows Application Control setups.
 
-`run_pipeline.py` is the whole local story: generate → bronze → dbt → ML → gold.
+`run_pipeline.py` is the whole local story: generate → bronze → dbt silver (staging and intermediate) → ML → gold. Silver is those dbt views, not a separate Parquet folder.
 
 ## Layout
 
