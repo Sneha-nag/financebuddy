@@ -39,15 +39,16 @@ Return ONLY valid JSON (no markdown) matching this schema:
     {
       "title": "short action",
       "why": "grounded in context",
-      "estimated_monthly_savings": number or null,
-      "priority": "high|medium|low",
+      "estimated_monthly_savings": 12.5,
+      "priority": "high",
       "cites": ["exact title or merchant_name from context"]
     }
   ],
-  "risks": [{"title": "...", "why": "...", "cites": ["..."]}],
-  "disclaimers": ["..."]
+  "risks": [{"title": "short risk", "why": "grounded in context", "cites": ["exact string from context"]}],
+  "disclaimers": ["Educational demo on synthetic data."]
 }
-Prefer at most 5 actions. Cite only strings that appear in the context.
+estimated_monthly_savings is a number or null. priority is high, medium, or low.
+Put a comma between every field. Prefer at most 5 actions. Cite only strings that appear in the context.
 Always include a disclaimer that data is synthetic / educational.
 """
 
@@ -257,7 +258,16 @@ def _repair_json_text(blob: str) -> str:
         if ch == '"':
             in_str = True
         out.append(ch)
-    return "".join(out)
+    blob = "".join(out)
+    # Models often finish a value, then start the next key on a new line with no comma.
+    blob = re.sub(
+        r'(true|false|null|["\]\}]|\d)(\s*\n\s*)"',
+        lambda m: m.group(1) + "," + m.group(2) + '"',
+        blob,
+    )
+    blob = re.sub(r"(\})(\s*\n\s*)(\{)", r"\1,\2\3", blob)
+    blob = re.sub(r",(\s*[}\]])", r"\1", blob)
+    return blob
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -377,6 +387,9 @@ class CoachCallBudget:
 
 
 def coach_enabled() -> bool:
+    from ml.bedrock_guardrail import load_env_defaults
+
+    load_env_defaults()
     return os.getenv("FINANCEBUDDY_COACH_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
 
 
@@ -422,7 +435,7 @@ def invoke_bedrock_coach(
     model_id: str | None = None,
     region: str | None = None,
     profile: str | None = None,
-    max_tokens: int = 800,
+    max_tokens: int = 1200,
     temperature: float = 0.2,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """

@@ -25,7 +25,7 @@ AWS_REGION=us-east-1
 AWS_PROFILE=default
 ```
 
-Haiku 4.5 needs the `us.` inference profile ID (not the bare foundation-model ID). Leave the guardrail id unset and the coach still runs; the call just is not screened.
+Haiku 4.5 needs the `us.` inference profile ID (not the bare foundation-model ID). `config/settings.yaml` stores the published guardrail id (`0f32zkcml75o`, version 3). The coach attaches that guardrail when the env var is unset.
 
 5. Run Streamlit → **AI Coach** tab → **Generate plan**.
 

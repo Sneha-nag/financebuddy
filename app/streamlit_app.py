@@ -143,6 +143,9 @@ def cached_backend(backend_name: str):
 
 
 def main() -> None:
+    from ml.bedrock_guardrail import load_env_defaults
+
+    load_env_defaults()
     found_keys = _export_secrets_to_env()
     require_password()
     settings = load_settings()

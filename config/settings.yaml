@@ -35,12 +35,14 @@ ml:
     daily_limit: 30
     # Bedrock calls per browser session (0 = unlimited). Cache hits do not count.
     session_limit: 2
-    max_tokens: 800
+    max_tokens: 1200
     temperature: 0.2
     # Bedrock Guardrail. Create it with scripts/create_bedrock_guardrail.py.
-    # The id and version live in the environment, not here.
+    # Environment overrides these. When unset, the coach uses this published id.
     guardrail:
       name: financebuddy-coach
+      id: 0f32zkcml75o
+      version: "3"
       # A faithful plan scores about 0.5. An off-topic reply scores under 0.1.
       # 0.7 blocked faithful plans. Relevance is omitted; it blocked them too.
       grounding_threshold: 0.3

@@ -49,15 +49,25 @@ def load_env_defaults() -> None:
 
 
 def guardrail_config_from_env() -> dict[str, str] | None:
-    """Converse guardrailConfig, or None when the coach should run without one."""
+    """Converse guardrailConfig, or None when the coach should run without one.
+
+    Environment wins. If it is unset, settings.yaml supplies the published
+    financebuddy-coach id so a hosted app does not silently skip the screen.
+    """
     load_env_defaults()
     identifier = (os.getenv("FINANCEBUDDY_BEDROCK_GUARDRAIL_ID") or "").strip()
+    version = (os.getenv("FINANCEBUDDY_BEDROCK_GUARDRAIL_VERSION") or "").strip()
+    if not identifier:
+        from config import load_settings
+
+        cfg = ((load_settings().get("ml") or {}).get("coach") or {}).get("guardrail") or {}
+        identifier = str(cfg.get("id") or "").strip()
+        version = version or str(cfg.get("version") or "").strip()
     if not identifier:
         return None
-    version = (os.getenv("FINANCEBUDDY_BEDROCK_GUARDRAIL_VERSION") or "DRAFT").strip() or "DRAFT"
     return {
         "guardrailIdentifier": identifier,
-        "guardrailVersion": version,
+        "guardrailVersion": version or "DRAFT",
         "trace": "enabled",
     }
 
